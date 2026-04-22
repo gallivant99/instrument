@@ -1,0 +1,7 @@
+.venv/
+.uv-cache/
+__pycache__/
+*.pyc
+data/*.xlsx
+data/traceability.backup-*.db
+.tmp_tests/

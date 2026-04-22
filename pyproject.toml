@@ -1,0 +1,10 @@
+[project]
+name = "medical-device-traceability"
+version = "0.1.0"
+description = "医疗器械全生命周期追溯管理系统演示原型"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+
