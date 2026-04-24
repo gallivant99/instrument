@@ -93,6 +93,45 @@ class TraceabilityRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/devices":
                 user = self._require_user("devices:write")
                 result = self.service.create_device(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/users":
+                user = self._require_user("users:manage")
+                result = self.service.create_user(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/suppliers":
+                user = self._require_user("suppliers:write")
+                result = self.service.create_supplier(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/purchase-staff":
+                user = self._require_user("purchase_staff:manage")
+                result = self.service.create_purchase_staff(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/purchase-plans":
+                user = self._require_user("purchase_plan:create")
+                result = self.service.create_purchase_plan(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/purchase-plans/approve":
+                user = self._require_user("purchase_plan:approve")
+                result = self.service.approve_purchase_plan(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/inbound-orders":
+                user = self._require_user("inbound_order:create")
+                result = self.service.create_inbound_order(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/inbound-orders/approve":
+                user = self._require_user("inbound_order:approve")
+                result = self.service.approve_inbound_order(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/device-requests":
+                user = self._require_user("request:create")
+                result = self.service.create_device_request(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/device-requests/approve":
+                user = self._require_user("request:approve")
+                result = self.service.approve_device_request(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/device-requests/issue":
+                user = self._require_user("request:issue")
+                result = self.service.issue_device_request(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/quality-reports":
+                user = self._require_user("quality:write")
+                result = self.service.create_quality_report(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/quality-reports/handle":
+                user = self._require_user("quality:manage")
+                result = self.service.handle_quality_report(payload, actor=user, ip_address=client_ip)
+            elif parsed.path == "/api/transfers":
+                user = self._require_user("transfer:create")
+                result = self.service.create_transfer(payload, actor=user, ip_address=client_ip)
             elif parsed.path == "/api/warehouse/inbound":
                 user = self._require_user("warehouse:write")
                 result = self.service.record_inbound(payload, actor=user, ip_address=client_ip)
@@ -165,6 +204,30 @@ class TraceabilityRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/inventory":
             self._require_user("devices:view")
             payload = self.service.list_inventory()
+        elif parsed.path == "/api/suppliers":
+            self._require_user("suppliers:view")
+            payload = self.service.list_suppliers()
+        elif parsed.path == "/api/users":
+            self._require_user("users:view")
+            payload = self.service.list_users()
+        elif parsed.path == "/api/purchase-staff":
+            self._require_user("purchase_staff:manage")
+            payload = self.service.list_purchase_staff()
+        elif parsed.path == "/api/purchase-plans":
+            self._require_user("purchase_plan:view")
+            payload = self.service.list_purchase_plans()
+        elif parsed.path == "/api/inbound-orders":
+            self._require_user("inbound_order:view")
+            payload = self.service.list_inbound_orders()
+        elif parsed.path == "/api/device-requests":
+            self._require_user("request:view")
+            payload = self.service.list_device_requests()
+        elif parsed.path == "/api/quality-reports":
+            self._require_user("quality:view")
+            payload = self.service.list_quality_reports()
+        elif parsed.path == "/api/transfers":
+            self._require_user("transfer:view")
+            payload = self.service.list_transfers()
         elif parsed.path == "/api/maintenance":
             self._require_user("devices:view")
             payload = self.service.list_maintenance_records()

@@ -190,6 +190,125 @@ CREATE TABLE IF NOT EXISTS scrap_requests (
     FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS purchase_staff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    staff_no TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    phone TEXT,
+    department TEXT,
+    position TEXT,
+    qualification TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_no TEXT NOT NULL UNIQUE,
+    device_id INTEGER NOT NULL,
+    supplier_id INTEGER,
+    quantity INTEGER NOT NULL,
+    estimated_unit_price REAL NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL,
+    source TEXT,
+    status TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT,
+    purchased_at TEXT,
+    remark TEXT,
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+);
+
+CREATE TABLE IF NOT EXISTS inbound_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_no TEXT NOT NULL UNIQUE,
+    plan_id INTEGER,
+    procurement_id INTEGER,
+    device_id INTEGER NOT NULL,
+    supplier_id INTEGER,
+    quantity INTEGER NOT NULL,
+    warehouse TEXT NOT NULL,
+    status TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT,
+    received_at TEXT,
+    remark TEXT,
+    FOREIGN KEY (plan_id) REFERENCES purchase_plans(id),
+    FOREIGN KEY (procurement_id) REFERENCES procurements(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+);
+
+CREATE TABLE IF NOT EXISTS device_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_no TEXT NOT NULL UNIQUE,
+    requester_id INTEGER,
+    requester_name TEXT NOT NULL,
+    department_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    purpose TEXT NOT NULL,
+    status TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT,
+    issued_by TEXT,
+    issued_at TEXT,
+    remark TEXT,
+    FOREIGN KEY (requester_id) REFERENCES users(id),
+    FOREIGN KEY (department_id) REFERENCES departments(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS quality_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_no TEXT NOT NULL UNIQUE,
+    reporter_id INTEGER,
+    reporter_name TEXT NOT NULL,
+    department_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    patient_id INTEGER,
+    problem_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    handled_by TEXT,
+    handled_at TEXT,
+    handling_result TEXT,
+    remark TEXT,
+    FOREIGN KEY (reporter_id) REFERENCES users(id),
+    FOREIGN KEY (department_id) REFERENCES departments(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    FOREIGN KEY (patient_id) REFERENCES patients(id)
+);
+
+CREATE TABLE IF NOT EXISTS department_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_no TEXT NOT NULL UNIQUE,
+    device_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    from_department_id INTEGER NOT NULL,
+    to_department_id INTEGER NOT NULL,
+    operator_name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    transferred_at TEXT NOT NULL,
+    remark TEXT,
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    FOREIGN KEY (from_department_id) REFERENCES departments(id),
+    FOREIGN KEY (to_department_id) REFERENCES departments(id)
+);
+
 CREATE TABLE IF NOT EXISTS trace_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id INTEGER NOT NULL,
@@ -226,6 +345,11 @@ CREATE INDEX IF NOT EXISTS idx_trace_events_device_time ON trace_events(device_i
 CREATE INDEX IF NOT EXISTS idx_procurements_status ON procurements(status);
 CREATE INDEX IF NOT EXISTS idx_recall_cases_status ON recall_cases(status);
 CREATE INDEX IF NOT EXISTS idx_scrap_requests_status ON scrap_requests(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_plans_status ON purchase_plans(status);
+CREATE INDEX IF NOT EXISTS idx_inbound_orders_status ON inbound_orders(status);
+CREATE INDEX IF NOT EXISTS idx_device_requests_status ON device_requests(status);
+CREATE INDEX IF NOT EXISTS idx_quality_reports_status ON quality_reports(status);
+CREATE INDEX IF NOT EXISTS idx_department_transfers_time ON department_transfers(transferred_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 """
 
@@ -254,11 +378,44 @@ def initialize_database(db_path: Path | str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with get_connection(path) as connection:
         connection.executescript(SCHEMA)
+        _ensure_schema_upgrades(connection)
+
+
+def _ensure_schema_upgrades(connection: sqlite3.Connection) -> None:
+    _ensure_columns(
+        connection,
+        "suppliers",
+        {
+            "business_scope": "TEXT",
+            "qualification": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+        },
+    )
+    _ensure_columns(
+        connection,
+        "users",
+        {
+            "job_no": "TEXT",
+            "phone": "TEXT",
+            "department": "TEXT",
+        },
+    )
+
+
+def _ensure_columns(connection: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
+    existing_columns = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    for column_name, column_definition in columns.items():
+        if column_name not in existing_columns:
+            connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
 
 
 def seed_demo_data(db_path: Path | str) -> None:
     with get_connection(db_path) as connection:
         if _has_rows(connection, "devices"):
+            _seed_workflow_demo_data(connection, now_text(), date.today())
             return
 
         created_at = now_text()
@@ -281,6 +438,24 @@ def seed_demo_data(db_path: Path | str) -> None:
             VALUES (?, ?, ?, ?, ?)
             """,
             [(name, license_no, contact, phone, created_at) for name, license_no, contact, phone in suppliers],
+        )
+        supplier_profiles = [
+            ("西安智联医疗科技有限公司", "一次性无菌耗材、导管类耗材、基础护理材料", "医疗器械经营许可证；ISO13485；UDI 数据接口已备案"),
+            ("秦康高值耗材供应链有限公司", "骨科、心血管介入、植入类高值耗材配送", "陕西省高值耗材配送资质；冷链运输能力备案"),
+            ("华睿医疗设备服务有限公司", "输注、手术室、监护类设备供货与维保", "医疗设备维修服务能力等级证明；计量校准合作资质"),
+            ("国药控股陕西医疗器械有限公司", "综合医疗器械、检验耗材、设备备件", "国药控股集团授权；医疗器械三类经营许可证"),
+            ("美敦力医疗用品技术服务有限公司", "心血管介入、神经介入及植入类耗材", "厂家授权书；进口医疗器械注册证备案"),
+            ("强生医疗器材供应链有限公司", "外科缝线、骨科内固定、介入辅助耗材", "厂家一级授权；质量追溯平台对接证明"),
+            ("迈瑞医疗设备股份有限公司", "监护、呼吸、急救和输注设备", "生产企业许可证；售后服务承诺书；软件版本合规证明"),
+            ("威高医用材料西北配送中心", "穿刺、留置、透析和敷料类普耗配送", "医疗器械经营许可证；批号追溯能力说明"),
+        ]
+        connection.executemany(
+            """
+            UPDATE suppliers
+            SET business_scope = ?, qualification = ?, status = 'active'
+            WHERE name = ?
+            """,
+            [(scope, qualification, name) for name, scope, qualification in supplier_profiles],
         )
 
         departments = [
@@ -339,6 +514,8 @@ def seed_demo_data(db_path: Path | str) -> None:
             ("admin", "admin123", "系统管理员", "admin"),
             ("warehouse", "warehouse123", "库房管理员", "warehouse"),
             ("nurse", "nurse123", "临床护士", "clinician"),
+            ("doctor", "doctor123", "临床医生", "clinician"),
+            ("buyer", "buyer123", "采购员王倩", "purchaser"),
             ("engineer", "engineer123", "设备工程师", "engineer"),
             ("manager", "manager123", "管理人员", "manager"),
         ]
@@ -348,6 +525,23 @@ def seed_demo_data(db_path: Path | str) -> None:
             VALUES (?, ?, ?, ?, 1, ?)
             """,
             [(username, password, display_name, role, created_at) for username, password, display_name, role in users],
+        )
+        user_profiles = [
+            ("admin", "ADM-001", "18802990001", "信息与设备管理中心"),
+            ("warehouse", "WH-002", "18802990002", "中央库房"),
+            ("nurse", "CLN-018", "18802990018", "心内科"),
+            ("doctor", "CLN-006", "18802990006", "普外科"),
+            ("buyer", "PUR-003", "18802990003", "采购办"),
+            ("engineer", "ENG-011", "18802990011", "设备科"),
+            ("manager", "MGR-001", "18802990010", "质控办"),
+        ]
+        connection.executemany(
+            """
+            UPDATE users
+            SET job_no = ?, phone = ?, department = ?
+            WHERE username = ?
+            """,
+            [(job_no, phone, department, username) for username, job_no, phone, department in user_profiles],
         )
 
         supplier_ids = _id_map(connection, "suppliers")
@@ -763,7 +957,317 @@ def seed_demo_data(db_path: Path | str) -> None:
                 (user_ids.get(username), username, role, action, target_type, target_name, detail, timestamp_text(today - timedelta(days=days_ago), 17, 10)),
             )
 
+        _seed_workflow_demo_data(connection, created_at, today)
+
         connection.execute("UPDATE devices SET stock_qty = MAX(stock_qty - 4, 0) WHERE device_name = '血糖试纸'")
+
+
+def _seed_workflow_demo_data(connection: sqlite3.Connection, created_at: str, today: date) -> None:
+    supplier_profiles = [
+        ("西安智联医疗科技有限公司", "一次性无菌耗材、导管类耗材、基础护理材料", "医疗器械经营许可证；ISO13485；UDI 数据接口已备案"),
+        ("秦康高值耗材供应链有限公司", "骨科、心血管介入、植入类高值耗材配送", "陕西省高值耗材配送资质；冷链运输能力备案"),
+        ("华睿医疗设备服务有限公司", "输注、手术室、监护类设备供货与维保", "医疗设备维修服务能力等级证明；计量校准合作资质"),
+        ("国药控股陕西医疗器械有限公司", "综合医疗器械、检验耗材、设备备件", "国药控股集团授权；医疗器械三类经营许可证"),
+        ("美敦力医疗用品技术服务有限公司", "心血管介入、神经介入及植入类耗材", "厂家授权书；进口医疗器械注册证备案"),
+        ("强生医疗器材供应链有限公司", "外科缝线、骨科内固定、介入辅助耗材", "厂家一级授权；质量追溯平台对接证明"),
+        ("迈瑞医疗设备股份有限公司", "监护、呼吸、急救和输注设备", "生产企业许可证；售后服务承诺书；软件版本合规证明"),
+        ("威高医用材料西北配送中心", "穿刺、留置、透析和敷料类普耗配送", "医疗器械经营许可证；批号追溯能力说明"),
+    ]
+    connection.executemany(
+        """
+        UPDATE suppliers
+        SET business_scope = ?, qualification = ?, status = COALESCE(status, 'active')
+        WHERE name = ?
+        """,
+        [(scope, qualification, name) for name, scope, qualification in supplier_profiles],
+    )
+
+    extra_users = [
+        ("doctor", "doctor123", "临床医生", "clinician", "CLN-006", "18802990006", "普外科"),
+        ("buyer", "buyer123", "采购员王倩", "purchaser", "PUR-003", "18802990003", "采购办"),
+        ("buyer_li", "buyer123", "采购员李晨", "purchaser", "PUR-004", "18802990004", "采购办"),
+    ]
+    for username, password, display_name, role, job_no, phone, department in extra_users:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO users (
+                username, password, display_name, role, is_active, created_at,
+                job_no, phone, department
+            )
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+            """,
+            (username, password, display_name, role, created_at, job_no, phone, department),
+        )
+        connection.execute(
+            """
+            UPDATE users
+            SET display_name = ?, role = ?, job_no = ?, phone = ?, department = ?
+            WHERE username = ?
+            """,
+            (display_name, role, job_no, phone, department, username),
+        )
+
+    user_ids = {row["username"]: row["id"] for row in connection.execute("SELECT id, username FROM users")}
+    if not _has_rows(connection, "purchase_staff"):
+        purchase_staff = [
+            ("buyer", "PUR-003", "王倩", "18802990003", "采购办", "采购专员", "医疗器械采购内控培训合格；供应商准入审核授权"),
+            ("buyer_li", "PUR-004", "李晨", "18802990004", "采购办", "采购专员", "合同归档与验收入库流程培训合格"),
+            (None, "PUR-008", "刘思敏", "18802990008", "采购办", "采购助理", "供应商证照复核与价格比对培训合格"),
+        ]
+        connection.executemany(
+            """
+            INSERT INTO purchase_staff (
+                user_id, staff_no, name, phone, department, position,
+                qualification, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+            """,
+            [
+                (user_ids.get(username), staff_no, name, phone, department, position, qualification, created_at)
+                for username, staff_no, name, phone, department, position, qualification in purchase_staff
+            ],
+        )
+
+    device_rows = connection.execute("SELECT id, device_name, supplier_id, unit FROM devices").fetchall()
+    if not device_rows:
+        return
+    device_ids = {row["device_name"]: row["id"] for row in device_rows}
+    device_units = {row["id"]: row["unit"] for row in device_rows}
+    device_suppliers = {row["id"]: row["supplier_id"] for row in device_rows}
+    department_ids = _id_map(connection, "departments")
+    patient_ids = {row["patient_no"]: row["id"] for row in connection.execute("SELECT id, patient_no FROM patients")}
+
+    if not _has_rows(connection, "purchase_plans"):
+        purchase_plans = [
+            ("PP-20260402-001", "中心静脉导管包", 40, 268, "ICU 一周消耗高于安全库存，需补充三腔导管包", "库存预警", 22, "approved", "王倩", "陈晨", "同意按预警数量采购", None, "已转采购执行"),
+            ("PP-20260406-002", "输液泵", 4, 13800, "住院病区新增床位，输注设备不足", "科室需求", 18, "approved", "李晨", "陈晨", "同意采购，要求到货后设备科验收", None, "待供应商发货"),
+            ("PP-20260408-003", "人工晶状体", 12, 3200, "眼科择期手术排期增加，补充常用屈光度库存", "临床需求", 16, "submitted", "王倩", None, None, None, "待管理员审核"),
+            ("PP-20260410-004", "静脉留置针", 800, 4.8, "全院月度普耗补货", "月度计划", 14, "submitted", "王倩", None, None, None, "按月度消耗量测算"),
+            ("PP-20260413-005", "PTCA 导丝", 30, 980, "心内介入耗材低库存补货", "库存预警", 11, "approved", "李晨", "陈晨", "同意采购，保留批号追溯", None, "审批通过"),
+            ("PP-20260415-006", "血糖试纸", 100, 95, "内分泌科门诊与病区消耗增加", "库存预警", 9, "rejected", "王倩", "陈晨", "本周已有在途订单，暂缓重复采购", None, "已退回"),
+        ]
+        for plan_no, device_name, quantity, price, reason, source, days_ago, status, submitted_by, reviewed_by, review_note, purchased_days, remark in purchase_plans:
+            if device_name not in device_ids:
+                continue
+            device_id = device_ids[device_name]
+            submitted_at = timestamp_text(today - timedelta(days=days_ago), 10, days_ago % 40)
+            reviewed_at = timestamp_text(today - timedelta(days=max(days_ago - 1, 0)), 15, days_ago % 35) if reviewed_by else None
+            purchased_at = timestamp_text(today - timedelta(days=purchased_days), 11, 20) if purchased_days is not None else None
+            cursor = connection.execute(
+                """
+                INSERT INTO purchase_plans (
+                    plan_no, device_id, supplier_id, quantity, estimated_unit_price,
+                    reason, source, status, submitted_by, submitted_at,
+                    reviewed_by, reviewed_at, review_note, purchased_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan_no,
+                    device_id,
+                    device_suppliers[device_id],
+                    quantity,
+                    price,
+                    reason,
+                    source,
+                    status,
+                    submitted_by,
+                    submitted_at,
+                    reviewed_by,
+                    reviewed_at,
+                    review_note,
+                    purchased_at,
+                    remark,
+                ),
+            )
+            _trace(connection, device_id, "PURCHASE_PLAN", "提交采购计划", f"{plan_no}：{reason}，数量 {quantity}{device_units[device_id]}。", "purchase_plans", cursor.lastrowid, submitted_by, "采购办", submitted_at)
+            if reviewed_at:
+                _trace(connection, device_id, "PURCHASE_PLAN_REVIEW", "采购计划审核", review_note or "采购计划已审核。", "purchase_plans", cursor.lastrowid, reviewed_by, "管理员工作台", reviewed_at)
+
+    if not _has_rows(connection, "inbound_orders"):
+        plan_ids = {row["plan_no"]: row["id"] for row in connection.execute("SELECT id, plan_no FROM purchase_plans")}
+        inbound_orders = [
+            ("IN-20260405-001", "PP-20260402-001", "中心静脉导管包", 40, "中央库房", 19, "approved", "王倩", "韩雪", "票据、批号、UDI 批量校验通过", None),
+            ("IN-20260411-002", "PP-20260413-005", "PTCA 导丝", 30, "高值耗材库", 7, "submitted", "李晨", None, None, "供应商已送达，待管理员验收入库"),
+            ("IN-20260412-003", None, "输液泵", 3, "设备科", 6, "received", "王倩", "韩雪", "设备科完成开箱验收，序列号已登记", "已入库并等待科室领用"),
+            ("IN-20260416-004", "PP-20260406-002", "输液泵", 1, "设备科", 4, "submitted", "李晨", None, None, "分批到货，待管理员审核"),
+            ("IN-20260417-005", None, "医用敷料包", 50, "中央库房", 3, "rejected", "刘思敏", "韩雪", "外包装破损比例超限，退回供应商", "供应商重新发货中"),
+        ]
+        for order_no, plan_no, device_name, quantity, warehouse, days_ago, status, submitted_by, reviewed_by, review_note, remark in inbound_orders:
+            if device_name not in device_ids:
+                continue
+            device_id = device_ids[device_name]
+            submitted_at = timestamp_text(today - timedelta(days=days_ago), 9, days_ago % 45)
+            reviewed_at = timestamp_text(today - timedelta(days=max(days_ago - 1, 0)), 14, days_ago % 35) if reviewed_by else None
+            received_at = reviewed_at if status == "received" else None
+            cursor = connection.execute(
+                """
+                INSERT INTO inbound_orders (
+                    order_no, plan_id, device_id, supplier_id, quantity, warehouse,
+                    status, submitted_by, submitted_at, reviewed_by, reviewed_at,
+                    review_note, received_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_no,
+                    plan_ids.get(plan_no) if plan_no else None,
+                    device_id,
+                    device_suppliers[device_id],
+                    quantity,
+                    warehouse,
+                    status,
+                    submitted_by,
+                    submitted_at,
+                    reviewed_by,
+                    reviewed_at,
+                    review_note,
+                    received_at,
+                    remark,
+                ),
+            )
+            _trace(connection, device_id, "INBOUND_ORDER", "提交采购入库单", f"{order_no} 到货 {quantity}{device_units[device_id]}，位置：{warehouse}。", "inbound_orders", cursor.lastrowid, submitted_by, "采购办", submitted_at)
+            if reviewed_at:
+                _trace(connection, device_id, "INBOUND_REVIEW", "入库单审核", review_note or "入库单已审核。", "inbound_orders", cursor.lastrowid, reviewed_by, warehouse, reviewed_at)
+
+    if not _has_rows(connection, "device_requests"):
+        device_requests = [
+            ("REQ-20260409-001", "nurse", "心内科", "PTCA 导丝", 2, "冠脉介入手术备用", 15, "issued", "陈晨", "同意发放，按手术排期领用", "韩雪", "已由高值耗材库扫码出库"),
+            ("REQ-20260412-002", "doctor", "普外科", "可吸收缝线", 12, "腹腔镜胆囊切除术周计划", 12, "approved", "陈晨", "同意，库房按批号先进先出发放", None, "待库房发放"),
+            ("REQ-20260414-003", "nurse", "ICU", "中心静脉导管包", 6, "ICU 留置导管治疗备用", 10, "submitted", None, None, None, "待管理员审批"),
+            ("REQ-20260416-004", "doctor", "骨科", "人工关节假体", 1, "右髋置换择期手术", 8, "rejected", "陈晨", "患者手术方案调整，暂不发放", None, "已退回科室"),
+            ("REQ-20260418-005", "nurse", "肾内科", "透析管路", 20, "血液透析中心日常消耗", 6, "approved", "陈晨", "同意补充二级库", None, "待库房配送"),
+            ("REQ-20260420-006", "doctor", "眼科", "人工晶状体", 1, "白内障人工晶体植入", 4, "issued", "陈晨", "与患者病历绑定后发放", "韩雪", "已发放到眼科耗材柜"),
+        ]
+        for request_no, username, department_name, device_name, quantity, purpose, days_ago, status, reviewed_by, review_note, issued_by, remark in device_requests:
+            if device_name not in device_ids or department_name not in department_ids:
+                continue
+            submitted_at = timestamp_text(today - timedelta(days=days_ago), 8, days_ago % 50)
+            reviewed_at = timestamp_text(today - timedelta(days=max(days_ago - 1, 0)), 15, days_ago % 30) if reviewed_by else None
+            issued_at = timestamp_text(today - timedelta(days=max(days_ago - 2, 0)), 10, days_ago % 30) if issued_by else None
+            requester = connection.execute("SELECT id, display_name FROM users WHERE username = ?", (username,)).fetchone()
+            device_id = device_ids[device_name]
+            cursor = connection.execute(
+                """
+                INSERT INTO device_requests (
+                    request_no, requester_id, requester_name, department_id, device_id,
+                    quantity, purpose, status, submitted_at, reviewed_by, reviewed_at,
+                    review_note, issued_by, issued_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_no,
+                    requester["id"] if requester else None,
+                    requester["display_name"] if requester else username,
+                    department_ids[department_name],
+                    device_id,
+                    quantity,
+                    purpose,
+                    status,
+                    submitted_at,
+                    reviewed_by,
+                    reviewed_at,
+                    review_note,
+                    issued_by,
+                    issued_at,
+                    remark,
+                ),
+            )
+            _trace(connection, device_id, "DEVICE_REQUEST", "提交器械申领单", f"{department_name} 申领 {quantity}{device_units[device_id]}，用途：{purpose}。", "device_requests", cursor.lastrowid, requester["display_name"] if requester else username, department_name, submitted_at)
+            if issued_at:
+                _trace(connection, device_id, "REQUEST_ISSUE", "申领单发放", f"{request_no} 已发放到 {department_name}。", "device_requests", cursor.lastrowid, issued_by, department_name, issued_at)
+
+    if not _has_rows(connection, "quality_reports"):
+        quality_reports = [
+            ("QR-20260411-001", "nurse", "心内科", "血管鞘组", "P2026005", "包装/标签异常", "中", "同批次外包装标签粘附力不足，已暂停使用并封存剩余库存。", 13, "processing", "陈晨", "已关联召回单 RC-20260412-002，等待供应商复核。", "涉及批号已锁定"),
+            ("QR-20260415-002", "doctor", "普外科", "医用敷料包", "P2026013", "污染/破损", "高", "换药时发现外包装边缘破损，未用于患者，已拍照留证。", 9, "resolved", "韩雪", "确认运输破损，已报废 6 包并要求供应商补发。", "处理完成"),
+            ("QR-20260418-003", "nurse", "ICU", "中心静脉导管包", "P2026006", "疑似性能异常", "中", "导丝推进阻力偏大，现场更换备用包后治疗完成。", 6, "submitted", None, None, "待管理员处理"),
+            ("QR-20260419-004", "doctor", "眼科", "人工晶状体", "P2026009", "资料不完整", "低", "随货合格证批号与外盒批号不一致，未发放。", 5, "processing", "陈晨", "已联系供应商补充批号说明。", "待供应商回函"),
+            ("QR-20260421-005", "nurse", "肾内科", "透析管路", "P2026011", "使用反馈", "低", "个别包装开启手感偏紧，未影响透析治疗。", 3, "resolved", "韩雪", "抽检同批次未复现，记录观察。", "持续关注"),
+        ]
+        for report_no, username, department_name, device_name, patient_no, problem_type, severity, description, days_ago, status, handled_by, handling_result, remark in quality_reports:
+            if device_name not in device_ids or department_name not in department_ids:
+                continue
+            submitted_at = timestamp_text(today - timedelta(days=days_ago), 13, days_ago % 45)
+            handled_at = timestamp_text(today - timedelta(days=max(days_ago - 1, 0)), 16, days_ago % 35) if handled_by else None
+            reporter = connection.execute("SELECT id, display_name FROM users WHERE username = ?", (username,)).fetchone()
+            device_id = device_ids[device_name]
+            cursor = connection.execute(
+                """
+                INSERT INTO quality_reports (
+                    report_no, reporter_id, reporter_name, department_id, device_id,
+                    patient_id, problem_type, severity, description, status,
+                    submitted_at, handled_by, handled_at, handling_result, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_no,
+                    reporter["id"] if reporter else None,
+                    reporter["display_name"] if reporter else username,
+                    department_ids[department_name],
+                    device_id,
+                    patient_ids.get(patient_no),
+                    problem_type,
+                    severity,
+                    description,
+                    status,
+                    submitted_at,
+                    handled_by,
+                    handled_at,
+                    handling_result,
+                    remark,
+                ),
+            )
+            _trace(connection, device_id, "QUALITY_REPORT", "质量问题上报", f"{problem_type}：{description}", "quality_reports", cursor.lastrowid, reporter["display_name"] if reporter else username, department_name, submitted_at)
+            if handled_at:
+                _trace(connection, device_id, "QUALITY_HANDLE", "质量问题处理", handling_result or "质量问题已处理。", "quality_reports", cursor.lastrowid, handled_by, "质控办", handled_at)
+
+    if not _has_rows(connection, "department_transfers"):
+        transfers = [
+            ("TF-20260407-001", "输液泵", 1, "设备科", "ICU", "韩雪", "ICU 临时扩容，设备科调拨备用输液泵", 17, "调拨后由 ICU 保管"),
+            ("TF-20260410-002", "高频电刀", 1, "手术室", "普外科", "韩雪", "普外科专项手术周借用", 14, "手术结束后归还手术室"),
+            ("TF-20260413-003", "医用敷料包", 30, "中央库房", "普外科", "韩雪", "普外科换药室补充二级库库存", 11, "按先进先出批号配送"),
+            ("TF-20260417-004", "鼻氧管", 80, "中央库房", "ICU", "韩雪", "ICU 呼吸治疗消耗补充", 7, "二级库补货"),
+            ("TF-20260420-005", "透析管路", 25, "中央库房", "肾内科", "韩雪", "血液透析中心周库存补充", 4, "完成扫码交接"),
+        ]
+        for transfer_no, device_name, quantity, from_department, to_department, operator, reason, days_ago, remark in transfers:
+            if device_name not in device_ids or from_department not in department_ids or to_department not in department_ids:
+                continue
+            device_id = device_ids[device_name]
+            transferred_at = timestamp_text(today - timedelta(days=days_ago), 10, days_ago % 45)
+            cursor = connection.execute(
+                """
+                INSERT INTO department_transfers (
+                    transfer_no, device_id, quantity, from_department_id, to_department_id,
+                    operator_name, reason, transferred_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    transfer_no,
+                    device_id,
+                    quantity,
+                    department_ids[from_department],
+                    department_ids[to_department],
+                    operator,
+                    reason,
+                    transferred_at,
+                    remark,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO stock_movements (
+                    device_id, movement_type, quantity, warehouse, department_id,
+                    operator_name, remark, occurred_at
+                )
+                VALUES (?, 'TRANSFER', ?, ?, ?, ?, ?, ?)
+                """,
+                (device_id, quantity, from_department, department_ids[to_department], operator, reason, transferred_at),
+            )
+            _trace(connection, device_id, "TRANSFER", "完成科室调拨", f"{from_department} 调拨至 {to_department}，数量 {quantity}{device_units[device_id]}。", "department_transfers", cursor.lastrowid, operator, to_department, transferred_at)
 
 
 def _has_rows(connection: sqlite3.Connection, table_name: str) -> bool:

@@ -21,6 +21,8 @@ $items = @(
     ".gitignore",
     "pyproject.toml",
     "README.md",
+    "start.bat",
+    "start.ps1",
     "uv.lock"
 )
 

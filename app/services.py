@@ -57,29 +57,55 @@ ROLE_PERMISSIONS = {
         "dashboard:view",
         "devices:view",
         "devices:write",
+        "inbound_order:approve",
+        "inbound_order:create",
+        "inbound_order:view",
         "maintenance:write",
+        "purchase_plan:approve",
+        "purchase_plan:create",
+        "purchase_plan:view",
+        "purchase_staff:manage",
+        "quality:manage",
+        "quality:write",
+        "quality:view",
         "procurement:approve",
         "procurement:create",
         "procurement:receive",
         "procurement:view",
         "recall:manage",
+        "request:approve",
+        "request:create",
+        "request:issue",
+        "request:view",
         "recall:view",
         "reports:view",
         "scrap:approve",
         "scrap:create",
         "scrap:dispose",
         "scrap:view",
+        "suppliers:write",
+        "suppliers:view",
         "trace:view",
+        "transfer:create",
+        "transfer:view",
+        "users:manage",
+        "users:view",
         "warehouse:write",
     },
     "warehouse": {
         "alerts:view",
         "dashboard:view",
         "devices:view",
+        "inbound_order:approve",
+        "inbound_order:view",
         "procurement:create",
         "procurement:receive",
         "procurement:view",
+        "request:issue",
+        "request:view",
         "trace:view",
+        "transfer:create",
+        "transfer:view",
         "warehouse:write",
     },
     "clinician": {
@@ -87,6 +113,10 @@ ROLE_PERMISSIONS = {
         "dashboard:view",
         "devices:view",
         "clinical:write",
+        "quality:write",
+        "quality:view",
+        "request:create",
+        "request:view",
         "trace:view",
     },
     "engineer": {
@@ -94,6 +124,8 @@ ROLE_PERMISSIONS = {
         "dashboard:view",
         "devices:view",
         "maintenance:write",
+        "quality:manage",
+        "quality:view",
         "scrap:create",
         "scrap:view",
         "trace:view",
@@ -103,14 +135,40 @@ ROLE_PERMISSIONS = {
         "audit:view",
         "dashboard:view",
         "devices:view",
+        "inbound_order:approve",
+        "inbound_order:view",
         "procurement:approve",
         "procurement:view",
+        "purchase_plan:approve",
+        "purchase_plan:view",
+        "purchase_staff:manage",
+        "quality:manage",
+        "quality:view",
         "recall:manage",
         "recall:view",
+        "request:approve",
+        "request:view",
         "reports:view",
         "scrap:approve",
         "scrap:dispose",
         "scrap:view",
+        "suppliers:view",
+        "trace:view",
+        "transfer:view",
+        "users:view",
+    },
+    "purchaser": {
+        "alerts:view",
+        "dashboard:view",
+        "devices:view",
+        "inbound_order:create",
+        "inbound_order:view",
+        "procurement:create",
+        "procurement:view",
+        "purchase_plan:create",
+        "purchase_plan:view",
+        "suppliers:write",
+        "suppliers:view",
         "trace:view",
     },
 }
@@ -135,7 +193,7 @@ class TraceabilityService:
         with get_connection(self.db_path) as connection:
             row = connection.execute(
                 """
-                SELECT id, username, display_name, role, is_active
+                SELECT id, username, display_name, role, is_active, job_no, phone, department
                 FROM users
                 WHERE username = ? AND password = ?
                 """,
@@ -149,7 +207,7 @@ class TraceabilityService:
         with get_connection(self.db_path) as connection:
             row = connection.execute(
                 """
-                SELECT id, username, display_name, role, is_active
+                SELECT id, username, display_name, role, is_active, job_no, phone, department
                 FROM users
                 WHERE id = ?
                 """,
@@ -164,7 +222,16 @@ class TraceabilityService:
 
     def get_lookups(self) -> dict[str, Any]:
         with get_connection(self.db_path) as connection:
-            suppliers = [dict(row) for row in connection.execute("SELECT id, name FROM suppliers ORDER BY name").fetchall()]
+            suppliers = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT id, name, license_no, contact_person, phone, business_scope, qualification, status
+                    FROM suppliers
+                    ORDER BY name
+                    """
+                ).fetchall()
+            ]
             departments = [
                 dict(row)
                 for row in connection.execute("SELECT id, name, type FROM departments ORDER BY type, name").fetchall()
@@ -205,6 +272,24 @@ class TraceabilityService:
                     "SELECT id, scrap_no, status FROM scrap_requests ORDER BY requested_at DESC, id DESC"
                 ).fetchall()
             ]
+            purchase_plans = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT id, plan_no, status FROM purchase_plans ORDER BY submitted_at DESC, id DESC"
+                ).fetchall()
+            ]
+            inbound_orders = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT id, order_no, status FROM inbound_orders ORDER BY submitted_at DESC, id DESC"
+                ).fetchall()
+            ]
+            users = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT id, username, display_name, role, department FROM users WHERE is_active = 1 ORDER BY role, display_name"
+                ).fetchall()
+            ]
         return {
             "suppliers": suppliers,
             "departments": departments,
@@ -213,6 +298,9 @@ class TraceabilityService:
             "procurements": procurements,
             "recalls": recalls,
             "scraps": scraps,
+            "purchase_plans": purchase_plans,
+            "inbound_orders": inbound_orders,
+            "users": users,
             "maintenance_types": ["保养", "维修", "校准"],
             "risk_levels": ["I类", "II类", "III类"],
             "trace_modes": ["RFID", "QR"],
@@ -220,6 +308,11 @@ class TraceabilityService:
             "recall_severities": ["高", "中", "低"],
             "procurement_statuses": ["requested", "approved", "completed"],
             "scrap_statuses": ["requested", "approved", "disposed"],
+            "purchase_plan_statuses": ["submitted", "approved", "rejected", "purchased"],
+            "inbound_order_statuses": ["submitted", "approved", "rejected", "received"],
+            "device_request_statuses": ["submitted", "approved", "rejected", "issued"],
+            "quality_report_statuses": ["submitted", "processing", "resolved", "rejected"],
+            "roles": ["admin", "manager", "purchaser", "warehouse", "clinician", "engineer"],
         }
 
     def list_devices(self) -> list[dict[str, Any]]:
@@ -229,6 +322,206 @@ class TraceabilityService:
     def list_inventory(self) -> list[dict[str, Any]]:
         devices = self.list_devices()
         return sorted(devices, key=lambda item: (item["stock_qty"], item["expiry_date"] or "9999-12-31"))
+
+    def list_suppliers(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, license_no, contact_person, phone,
+                       business_scope, qualification, status, created_at
+                FROM suppliers
+                ORDER BY name
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, username, display_name, role, job_no, phone,
+                       department, is_active, created_at
+                FROM users
+                ORDER BY role, display_name
+                """
+            ).fetchall()
+            return [self._serialize_user(row) for row in rows]
+
+    def list_purchase_staff(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    ps.id,
+                    ps.staff_no,
+                    ps.name,
+                    ps.phone,
+                    ps.department,
+                    ps.position,
+                    ps.qualification,
+                    ps.status,
+                    ps.created_at,
+                    u.username,
+                    u.display_name AS account_name
+                FROM purchase_staff ps
+                LEFT JOIN users u ON u.id = ps.user_id
+                ORDER BY ps.staff_no
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_purchase_plans(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    pp.id,
+                    pp.plan_no,
+                    pp.quantity,
+                    pp.estimated_unit_price,
+                    pp.reason,
+                    pp.source,
+                    pp.status,
+                    pp.submitted_by,
+                    pp.submitted_at,
+                    pp.reviewed_by,
+                    pp.reviewed_at,
+                    pp.review_note,
+                    pp.purchased_at,
+                    pp.remark,
+                    d.device_name,
+                    d.batch_no,
+                    d.stock_qty,
+                    d.reorder_threshold,
+                    d.unit,
+                    s.name AS supplier_name
+                FROM purchase_plans pp
+                JOIN devices d ON d.id = pp.device_id
+                LEFT JOIN suppliers s ON s.id = pp.supplier_id
+                ORDER BY pp.submitted_at DESC, pp.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_inbound_orders(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    io.id,
+                    io.order_no,
+                    io.quantity,
+                    io.warehouse,
+                    io.status,
+                    io.submitted_by,
+                    io.submitted_at,
+                    io.reviewed_by,
+                    io.reviewed_at,
+                    io.review_note,
+                    io.received_at,
+                    io.remark,
+                    pp.plan_no,
+                    p.request_no AS procurement_no,
+                    d.device_name,
+                    d.batch_no,
+                    d.unit,
+                    s.name AS supplier_name
+                FROM inbound_orders io
+                LEFT JOIN purchase_plans pp ON pp.id = io.plan_id
+                LEFT JOIN procurements p ON p.id = io.procurement_id
+                JOIN devices d ON d.id = io.device_id
+                LEFT JOIN suppliers s ON s.id = io.supplier_id
+                ORDER BY io.submitted_at DESC, io.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_device_requests(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    dr.id,
+                    dr.request_no,
+                    dr.requester_name,
+                    dep.name AS department_name,
+                    d.device_name,
+                    d.batch_no,
+                    d.unit,
+                    dr.quantity,
+                    dr.purpose,
+                    dr.status,
+                    dr.submitted_at,
+                    dr.reviewed_by,
+                    dr.reviewed_at,
+                    dr.review_note,
+                    dr.issued_by,
+                    dr.issued_at,
+                    dr.remark
+                FROM device_requests dr
+                JOIN departments dep ON dep.id = dr.department_id
+                JOIN devices d ON d.id = dr.device_id
+                ORDER BY dr.submitted_at DESC, dr.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_quality_reports(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    qr.id,
+                    qr.report_no,
+                    qr.reporter_name,
+                    dep.name AS department_name,
+                    d.device_name,
+                    d.batch_no,
+                    p.patient_no,
+                    p.name AS patient_name,
+                    qr.problem_type,
+                    qr.severity,
+                    qr.description,
+                    qr.status,
+                    qr.submitted_at,
+                    qr.handled_by,
+                    qr.handled_at,
+                    qr.handling_result,
+                    qr.remark
+                FROM quality_reports qr
+                JOIN departments dep ON dep.id = qr.department_id
+                JOIN devices d ON d.id = qr.device_id
+                LEFT JOIN patients p ON p.id = qr.patient_id
+                ORDER BY qr.submitted_at DESC, qr.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_transfers(self) -> list[dict[str, Any]]:
+        with get_connection(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    dt.id,
+                    dt.transfer_no,
+                    d.device_name,
+                    d.batch_no,
+                    d.unit,
+                    dt.quantity,
+                    fd.name AS from_department,
+                    td.name AS to_department,
+                    dt.operator_name,
+                    dt.reason,
+                    dt.transferred_at,
+                    dt.remark
+                FROM department_transfers dt
+                JOIN devices d ON d.id = dt.device_id
+                JOIN departments fd ON fd.id = dt.from_department_id
+                JOIN departments td ON td.id = dt.to_department_id
+                ORDER BY dt.transferred_at DESC, dt.id DESC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def list_maintenance_records(self) -> list[dict[str, Any]]:
         with get_connection(self.db_path) as connection:
@@ -382,6 +675,18 @@ class TraceabilityService:
             pending_procurements = connection.execute(
                 "SELECT COUNT(*) AS count FROM procurements WHERE status != 'completed'"
             ).fetchone()["count"]
+            pending_purchase_plans = connection.execute(
+                "SELECT COUNT(*) AS count FROM purchase_plans WHERE status = 'submitted'"
+            ).fetchone()["count"]
+            pending_device_requests = connection.execute(
+                "SELECT COUNT(*) AS count FROM device_requests WHERE status = 'submitted'"
+            ).fetchone()["count"]
+            pending_inbound_orders = connection.execute(
+                "SELECT COUNT(*) AS count FROM inbound_orders WHERE status = 'submitted'"
+            ).fetchone()["count"]
+            open_quality_reports = connection.execute(
+                "SELECT COUNT(*) AS count FROM quality_reports WHERE status IN ('submitted', 'processing')"
+            ).fetchone()["count"]
 
         return {
             "total_devices": total_devices,
@@ -394,6 +699,10 @@ class TraceabilityService:
             "stale_stocktake": len(alerts["stale_stocktake_alerts"]),
             "pending_scraps": pending_scraps,
             "pending_procurements": pending_procurements,
+            "pending_purchase_plans": pending_purchase_plans,
+            "pending_device_requests": pending_device_requests,
+            "pending_inbound_orders": pending_inbound_orders,
+            "open_quality_reports": open_quality_reports,
         }
 
     def get_alerts(self) -> dict[str, Any]:
@@ -666,6 +975,116 @@ class TraceabilityService:
                 """
             ).fetchall()
 
+            purchase_plan_rows = connection.execute(
+                """
+                SELECT
+                    pp.plan_no,
+                    d.device_name,
+                    s.name AS supplier_name,
+                    pp.quantity,
+                    pp.estimated_unit_price,
+                    pp.source,
+                    pp.status,
+                    pp.submitted_by,
+                    pp.submitted_at,
+                    pp.reviewed_by,
+                    pp.reviewed_at,
+                    pp.review_note
+                FROM purchase_plans pp
+                JOIN devices d ON d.id = pp.device_id
+                LEFT JOIN suppliers s ON s.id = pp.supplier_id
+                ORDER BY pp.submitted_at DESC
+                """
+            ).fetchall()
+
+            inbound_order_rows = connection.execute(
+                """
+                SELECT
+                    io.order_no,
+                    pp.plan_no,
+                    d.device_name,
+                    s.name AS supplier_name,
+                    io.quantity,
+                    io.warehouse,
+                    io.status,
+                    io.submitted_by,
+                    io.submitted_at,
+                    io.reviewed_by,
+                    io.reviewed_at,
+                    io.review_note
+                FROM inbound_orders io
+                LEFT JOIN purchase_plans pp ON pp.id = io.plan_id
+                JOIN devices d ON d.id = io.device_id
+                LEFT JOIN suppliers s ON s.id = io.supplier_id
+                ORDER BY io.submitted_at DESC
+                """
+            ).fetchall()
+
+            request_rows = connection.execute(
+                """
+                SELECT
+                    dr.request_no,
+                    dr.requester_name,
+                    dep.name AS department_name,
+                    d.device_name,
+                    dr.quantity,
+                    dr.purpose,
+                    dr.status,
+                    dr.submitted_at,
+                    dr.reviewed_by,
+                    dr.reviewed_at,
+                    dr.issued_by,
+                    dr.issued_at
+                FROM device_requests dr
+                JOIN departments dep ON dep.id = dr.department_id
+                JOIN devices d ON d.id = dr.device_id
+                ORDER BY dr.submitted_at DESC
+                """
+            ).fetchall()
+
+            quality_rows = connection.execute(
+                """
+                SELECT
+                    qr.report_no,
+                    qr.reporter_name,
+                    dep.name AS department_name,
+                    d.device_name,
+                    p.patient_no,
+                    p.name AS patient_name,
+                    qr.problem_type,
+                    qr.severity,
+                    qr.status,
+                    qr.submitted_at,
+                    qr.handled_by,
+                    qr.handled_at,
+                    qr.handling_result
+                FROM quality_reports qr
+                JOIN departments dep ON dep.id = qr.department_id
+                JOIN devices d ON d.id = qr.device_id
+                LEFT JOIN patients p ON p.id = qr.patient_id
+                ORDER BY qr.submitted_at DESC
+                """
+            ).fetchall()
+
+            transfer_rows = connection.execute(
+                """
+                SELECT
+                    dt.transfer_no,
+                    d.device_name,
+                    dt.quantity,
+                    fd.name AS from_department,
+                    td.name AS to_department,
+                    dt.operator_name,
+                    dt.reason,
+                    dt.transferred_at
+                FROM department_transfers dt
+                JOIN devices d ON d.id = dt.device_id
+                JOIN departments fd ON fd.id = dt.from_department_id
+                JOIN departments td ON td.id = dt.to_department_id
+                ORDER BY dt.transferred_at DESC
+                """
+            ).fetchall()
+
             audit_rows = connection.execute(
                 """
                 SELECT username, role, action, target_type, target_name, detail, created_at
@@ -698,6 +1117,31 @@ class TraceabilityService:
                         + [list(row) for row in procurement_rows],
                     ),
                     (
+                        "采购计划",
+                        [["计划号", "器械名称", "供应商", "数量", "预估单价", "来源", "状态", "提交人", "提交时间", "审核人", "审核时间", "审核意见"]]
+                        + [list(row) for row in purchase_plan_rows],
+                    ),
+                    (
+                        "采购入库单",
+                        [["入库单号", "计划号", "器械名称", "供应商", "数量", "入库位置", "状态", "提交人", "提交时间", "审核人", "审核时间", "审核意见"]]
+                        + [list(row) for row in inbound_order_rows],
+                    ),
+                    (
+                        "申领审批",
+                        [["申领单号", "申请人", "科室", "器械名称", "数量", "用途", "状态", "提交时间", "审核人", "审核时间", "发放人", "发放时间"]]
+                        + [list(row) for row in request_rows],
+                    ),
+                    (
+                        "质量问题",
+                        [["报告号", "上报人", "科室", "器械名称", "患者编号", "患者姓名", "问题类型", "严重程度", "状态", "上报时间", "处理人", "处理时间", "处理结果"]]
+                        + [list(row) for row in quality_rows],
+                    ),
+                    (
+                        "科室调拨",
+                        [["调拨单号", "器械名称", "数量", "调出科室", "调入科室", "操作人", "原因", "调拨时间"]]
+                        + [list(row) for row in transfer_rows],
+                    ),
+                    (
                         "召回管理",
                         [["召回单号", "器械名称", "批次号", "等级", "状态", "发起人", "发起时间", "受影响患者数"]]
                         + [list(row) for row in recall_rows],
@@ -725,6 +1169,553 @@ class TraceabilityService:
                 ip_address,
             )
             return workbook
+
+    def create_user(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        username = self._required_text(payload, "username", "用户名不能为空。")
+        display_name = self._required_text(payload, "display_name", "姓名不能为空。")
+        role = self._required_text(payload, "role", "请选择用户角色。")
+        if role not in ROLE_PERMISSIONS:
+            raise ValueError("用户角色不正确。")
+        password = self._optional_text(payload, "password") or "123456"
+        with get_connection(self.db_path) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO users (
+                    username, password, display_name, role, is_active,
+                    job_no, phone, department, created_at
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (
+                    username,
+                    password,
+                    display_name,
+                    role,
+                    self._optional_text(payload, "job_no"),
+                    self._optional_text(payload, "phone"),
+                    self._optional_text(payload, "department"),
+                    now_text(),
+                ),
+            )
+            self._log_audit(connection, actor, "CREATE_USER", "user", cursor.lastrowid, display_name, f"创建 {role} 用户。", ip_address)
+            row = connection.execute(
+                """
+                SELECT id, username, display_name, role, is_active, job_no, phone, department
+                FROM users
+                WHERE id = ?
+                """,
+                (cursor.lastrowid,),
+            ).fetchone()
+            return self._serialize_user(row)
+
+    def create_supplier(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        name = self._required_text(payload, "name", "供应商名称不能为空。")
+        with get_connection(self.db_path) as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO suppliers (
+                    name, license_no, contact_person, phone, business_scope,
+                    qualification, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+                """,
+                (
+                    name,
+                    self._optional_text(payload, "license_no"),
+                    self._optional_text(payload, "contact_person"),
+                    self._optional_text(payload, "phone"),
+                    self._optional_text(payload, "business_scope"),
+                    self._optional_text(payload, "qualification"),
+                    now_text(),
+                ),
+            )
+            self._log_audit(connection, actor, "CREATE_SUPPLIER", "supplier", cursor.lastrowid, name, "新增供应商档案。", ip_address)
+            return dict(connection.execute("SELECT * FROM suppliers WHERE id = ?", (cursor.lastrowid,)).fetchone())
+
+    def create_purchase_staff(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        staff_no = self._required_text(payload, "staff_no", "采购员工号不能为空。")
+        name = self._required_text(payload, "name", "采购员姓名不能为空。")
+        user_id = self._optional_int(payload, "user_id")
+        with get_connection(self.db_path) as connection:
+            if user_id:
+                self._ensure_exists(connection, "users", user_id, "关联用户不存在。")
+            cursor = connection.execute(
+                """
+                INSERT INTO purchase_staff (
+                    user_id, staff_no, name, phone, department, position,
+                    qualification, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                """,
+                (
+                    user_id,
+                    staff_no,
+                    name,
+                    self._optional_text(payload, "phone"),
+                    self._optional_text(payload, "department") or "采购办",
+                    self._optional_text(payload, "position") or "采购专员",
+                    self._optional_text(payload, "qualification"),
+                    now_text(),
+                ),
+            )
+            self._log_audit(connection, actor, "CREATE_PURCHASE_STAFF", "purchase_staff", cursor.lastrowid, name, "新增采购人员档案。", ip_address)
+            return dict(connection.execute("SELECT * FROM purchase_staff WHERE id = ?", (cursor.lastrowid,)).fetchone())
+
+    def create_purchase_plan(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        device_id = self._required_int(payload, "device_id", "请选择采购器械。")
+        quantity = self._required_positive_int(payload, "quantity", "采购计划数量必须大于 0。")
+        reason = self._required_text(payload, "reason", "请填写采购原因。")
+        supplier_id = self._optional_int(payload, "supplier_id")
+        submitted_at = now_text()
+        with get_connection(self.db_path) as connection:
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (device_id,))
+            if not device:
+                raise ValueError("器械不存在。")
+            supplier_id = supplier_id or device[0]["supplier_id"]
+            if supplier_id:
+                self._ensure_exists(connection, "suppliers", supplier_id, "供应商不存在。")
+            plan_no = self._generate_number(connection, "PP", "purchase_plans", "plan_no")
+            cursor = connection.execute(
+                """
+                INSERT INTO purchase_plans (
+                    plan_no, device_id, supplier_id, quantity, estimated_unit_price,
+                    reason, source, status, submitted_by, submitted_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?)
+                """,
+                (
+                    plan_no,
+                    device_id,
+                    supplier_id,
+                    quantity,
+                    self._optional_float(payload, "estimated_unit_price") or 0,
+                    reason,
+                    self._optional_text(payload, "source") or "手工提交",
+                    self._actor_name(actor),
+                    submitted_at,
+                    self._optional_text(payload, "remark"),
+                ),
+            )
+            self._insert_trace_event(connection, device_id, "PURCHASE_PLAN", "提交采购计划", f"采购计划 {plan_no}：{reason}，数量 {quantity}{device[0]['unit']}。", "purchase_plans", cursor.lastrowid, self._actor_name(actor), "采购办", submitted_at)
+            self._log_audit(connection, actor, "PURCHASE_PLAN_CREATE", "purchase_plan", cursor.lastrowid, plan_no, f"提交 {device[0]['device_name']} 采购计划。", ip_address)
+            return self._fetch_purchase_plan(connection, cursor.lastrowid)
+
+    def approve_purchase_plan(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        plan_id = self._required_int(payload, "plan_id", "请选择采购计划。")
+        decision = self._optional_text(payload, "decision") or "approved"
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("采购计划审核结果不正确。")
+        review_note = self._optional_text(payload, "review_note")
+        reviewed_at = now_text()
+        with get_connection(self.db_path) as connection:
+            plan = connection.execute("SELECT * FROM purchase_plans WHERE id = ?", (plan_id,)).fetchone()
+            if plan is None:
+                raise ValueError("采购计划不存在。")
+            if plan["status"] not in {"submitted", "approved"}:
+                raise ValueError("当前采购计划状态不可审核。")
+            connection.execute(
+                """
+                UPDATE purchase_plans
+                SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
+                WHERE id = ?
+                """,
+                (decision, self._actor_name(actor), reviewed_at, review_note, plan_id),
+            )
+            self._insert_trace_event(connection, plan["device_id"], "PURCHASE_PLAN_REVIEW", "采购计划审核", review_note or f"采购计划审核结果：{decision}。", "purchase_plans", plan_id, self._actor_name(actor), "管理员工作台", reviewed_at)
+            self._log_audit(connection, actor, "PURCHASE_PLAN_REVIEW", "purchase_plan", plan_id, plan["plan_no"], f"采购计划审核结果：{decision}。", ip_address)
+            return self._fetch_purchase_plan(connection, plan_id)
+
+    def create_inbound_order(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        device_id = self._required_int(payload, "device_id", "请选择到货器械。")
+        quantity = self._required_positive_int(payload, "quantity", "入库数量必须大于 0。")
+        warehouse = self._required_text(payload, "warehouse", "入库位置不能为空。")
+        plan_id = self._optional_int(payload, "plan_id")
+        procurement_id = self._optional_int(payload, "procurement_id")
+        submitted_at = now_text()
+        with get_connection(self.db_path) as connection:
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (device_id,))
+            if not device:
+                raise ValueError("器械不存在。")
+            if plan_id:
+                self._ensure_exists(connection, "purchase_plans", plan_id, "采购计划不存在。")
+            if procurement_id:
+                self._ensure_exists(connection, "procurements", procurement_id, "采购单不存在。")
+            supplier_id = self._optional_int(payload, "supplier_id") or device[0]["supplier_id"]
+            order_no = self._generate_number(connection, "IN", "inbound_orders", "order_no")
+            cursor = connection.execute(
+                """
+                INSERT INTO inbound_orders (
+                    order_no, plan_id, procurement_id, device_id, supplier_id,
+                    quantity, warehouse, status, submitted_by, submitted_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?)
+                """,
+                (
+                    order_no,
+                    plan_id,
+                    procurement_id,
+                    device_id,
+                    supplier_id,
+                    quantity,
+                    warehouse,
+                    self._actor_name(actor),
+                    submitted_at,
+                    self._optional_text(payload, "remark"),
+                ),
+            )
+            self._insert_trace_event(connection, device_id, "INBOUND_ORDER", "提交采购入库单", f"入库单 {order_no} 到货 {quantity}{device[0]['unit']}，待管理员审核。", "inbound_orders", cursor.lastrowid, self._actor_name(actor), warehouse, submitted_at)
+            self._log_audit(connection, actor, "INBOUND_ORDER_CREATE", "inbound_order", cursor.lastrowid, order_no, f"提交 {device[0]['device_name']} 采购入库单。", ip_address)
+            return self._fetch_inbound_order(connection, cursor.lastrowid)
+
+    def approve_inbound_order(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        order_id = self._required_int(payload, "order_id", "请选择入库单。")
+        decision = self._optional_text(payload, "decision") or "received"
+        if decision not in {"approved", "received", "rejected"}:
+            raise ValueError("入库单审核结果不正确。")
+        review_note = self._optional_text(payload, "review_note")
+        reviewed_at = now_text()
+        with get_connection(self.db_path) as connection:
+            order = connection.execute("SELECT * FROM inbound_orders WHERE id = ?", (order_id,)).fetchone()
+            if order is None:
+                raise ValueError("入库单不存在。")
+            if order["status"] not in {"submitted", "approved"}:
+                raise ValueError("当前入库单状态不可审核。")
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (order["device_id"],))[0]
+            received_at = reviewed_at if decision == "received" else None
+            connection.execute(
+                """
+                UPDATE inbound_orders
+                SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?, received_at = COALESCE(?, received_at)
+                WHERE id = ?
+                """,
+                (decision, self._actor_name(actor), reviewed_at, review_note, received_at, order_id),
+            )
+            if decision == "received":
+                movement_cursor = connection.execute(
+                    """
+                    INSERT INTO stock_movements (
+                        device_id, movement_type, quantity, warehouse, department_id,
+                        operator_name, remark, occurred_at
+                    )
+                    VALUES (?, 'INBOUND', ?, ?, NULL, ?, ?, ?)
+                    """,
+                    (order["device_id"], order["quantity"], order["warehouse"], self._actor_name(actor), review_note or "采购入库单审核通过并入库", reviewed_at),
+                )
+                connection.execute(
+                    """
+                    UPDATE devices
+                    SET stock_qty = stock_qty + ?, status = 'in_stock',
+                        current_location = ?, last_seen_at = ?
+                    WHERE id = ?
+                    """,
+                    (order["quantity"], order["warehouse"], reviewed_at, order["device_id"]),
+                )
+                self._insert_trace_event(connection, order["device_id"], "INBOUND", "采购入库审核通过", f"入库 {order['quantity']}{device['unit']}，位置：{order['warehouse']}。", "stock_movements", movement_cursor.lastrowid, self._actor_name(actor), order["warehouse"], reviewed_at)
+            else:
+                self._insert_trace_event(connection, order["device_id"], "INBOUND_REVIEW", "入库单审核", review_note or f"入库单审核结果：{decision}。", "inbound_orders", order_id, self._actor_name(actor), order["warehouse"], reviewed_at)
+            self._log_audit(connection, actor, "INBOUND_ORDER_REVIEW", "inbound_order", order_id, order["order_no"], f"入库单审核结果：{decision}。", ip_address)
+            return self._fetch_inbound_order(connection, order_id)
+
+    def create_device_request(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        device_id = self._required_int(payload, "device_id", "请选择申领器械。")
+        department_id = self._required_int(payload, "department_id", "请选择申领科室。")
+        quantity = self._required_positive_int(payload, "quantity", "申领数量必须大于 0。")
+        purpose = self._required_text(payload, "purpose", "申领用途不能为空。")
+        submitted_at = now_text()
+        with get_connection(self.db_path) as connection:
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (device_id,))
+            if not device:
+                raise ValueError("器械不存在。")
+            self._ensure_exists(connection, "departments", department_id, "科室不存在。")
+            department = connection.execute("SELECT name FROM departments WHERE id = ?", (department_id,)).fetchone()["name"]
+            request_no = self._generate_number(connection, "REQ", "device_requests", "request_no")
+            cursor = connection.execute(
+                """
+                INSERT INTO device_requests (
+                    request_no, requester_id, requester_name, department_id,
+                    device_id, quantity, purpose, status, submitted_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+                """,
+                (
+                    request_no,
+                    actor.get("id") if actor else None,
+                    self._actor_name(actor),
+                    department_id,
+                    device_id,
+                    quantity,
+                    purpose,
+                    submitted_at,
+                    self._optional_text(payload, "remark"),
+                ),
+            )
+            self._insert_trace_event(connection, device_id, "DEVICE_REQUEST", "提交器械申领单", f"{department} 申领 {quantity}{device[0]['unit']}，用途：{purpose}。", "device_requests", cursor.lastrowid, self._actor_name(actor), department, submitted_at)
+            self._log_audit(connection, actor, "DEVICE_REQUEST_CREATE", "device_request", cursor.lastrowid, request_no, f"提交 {device[0]['device_name']} 申领单。", ip_address)
+            return self._fetch_device_request(connection, cursor.lastrowid)
+
+    def approve_device_request(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        request_id = self._required_int(payload, "request_id", "请选择申领单。")
+        decision = self._optional_text(payload, "decision") or "approved"
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("申领单审核结果不正确。")
+        review_note = self._optional_text(payload, "review_note")
+        reviewed_at = now_text()
+        with get_connection(self.db_path) as connection:
+            request = connection.execute("SELECT * FROM device_requests WHERE id = ?", (request_id,)).fetchone()
+            if request is None:
+                raise ValueError("申领单不存在。")
+            if request["status"] != "submitted":
+                raise ValueError("只有待审批申领单可以审核。")
+            connection.execute(
+                """
+                UPDATE device_requests
+                SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
+                WHERE id = ?
+                """,
+                (decision, self._actor_name(actor), reviewed_at, review_note, request_id),
+            )
+            self._insert_trace_event(connection, request["device_id"], "REQUEST_REVIEW", "申领单审批", review_note or f"申领单审批结果：{decision}。", "device_requests", request_id, self._actor_name(actor), "管理员工作台", reviewed_at)
+            self._log_audit(connection, actor, "DEVICE_REQUEST_REVIEW", "device_request", request_id, request["request_no"], f"申领单审批结果：{decision}。", ip_address)
+            return self._fetch_device_request(connection, request_id)
+
+    def issue_device_request(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        request_id = self._required_int(payload, "request_id", "请选择申领单。")
+        issued_at = now_text()
+        with get_connection(self.db_path) as connection:
+            request = connection.execute("SELECT * FROM device_requests WHERE id = ?", (request_id,)).fetchone()
+            if request is None:
+                raise ValueError("申领单不存在。")
+            if request["status"] != "approved":
+                raise ValueError("只有已审批通过的申领单可以发放。")
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (request["device_id"],))[0]
+            if device["stock_qty"] < request["quantity"]:
+                raise ValueError("库存不足，无法发放申领器械。")
+            department = connection.execute("SELECT name FROM departments WHERE id = ?", (request["department_id"],)).fetchone()["name"]
+            movement_cursor = connection.execute(
+                """
+                INSERT INTO stock_movements (
+                    device_id, movement_type, quantity, warehouse, department_id,
+                    operator_name, remark, occurred_at
+                )
+                VALUES (?, 'REQUEST_ISSUE', ?, '中央库房', ?, ?, ?, ?)
+                """,
+                (request["device_id"], request["quantity"], request["department_id"], self._actor_name(actor), request["purpose"], issued_at),
+            )
+            connection.execute(
+                """
+                UPDATE devices
+                SET stock_qty = stock_qty - ?,
+                    status = CASE WHEN stock_qty - ? > 0 THEN 'in_stock' ELSE 'distributed' END,
+                    current_location = ?,
+                    last_seen_at = ?
+                WHERE id = ?
+                """,
+                (request["quantity"], request["quantity"], department, issued_at, request["device_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE device_requests
+                SET status = 'issued', issued_by = ?, issued_at = ?, remark = COALESCE(?, remark)
+                WHERE id = ?
+                """,
+                (self._actor_name(actor), issued_at, self._optional_text(payload, "remark"), request_id),
+            )
+            self._insert_trace_event(connection, request["device_id"], "REQUEST_ISSUE", "申领单发放出库", f"{department} 领用 {request['quantity']}{device['unit']}。", "stock_movements", movement_cursor.lastrowid, self._actor_name(actor), department, issued_at)
+            self._log_audit(connection, actor, "DEVICE_REQUEST_ISSUE", "device_request", request_id, request["request_no"], "申领单已发放并扣减库存。", ip_address)
+            return self._fetch_device_request(connection, request_id)
+
+    def create_quality_report(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        device_id = self._required_int(payload, "device_id", "请选择问题器械。")
+        department_id = self._required_int(payload, "department_id", "请选择上报科室。")
+        problem_type = self._required_text(payload, "problem_type", "问题类型不能为空。")
+        severity = self._required_text(payload, "severity", "严重程度不能为空。")
+        description = self._required_text(payload, "description", "问题描述不能为空。")
+        patient_id = self._optional_int(payload, "patient_id")
+        submitted_at = now_text()
+        with get_connection(self.db_path) as connection:
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (device_id,))
+            if not device:
+                raise ValueError("器械不存在。")
+            self._ensure_exists(connection, "departments", department_id, "科室不存在。")
+            if patient_id:
+                self._ensure_exists(connection, "patients", patient_id, "患者不存在。")
+            department = connection.execute("SELECT name FROM departments WHERE id = ?", (department_id,)).fetchone()["name"]
+            report_no = self._generate_number(connection, "QR", "quality_reports", "report_no")
+            cursor = connection.execute(
+                """
+                INSERT INTO quality_reports (
+                    report_no, reporter_id, reporter_name, department_id,
+                    device_id, patient_id, problem_type, severity, description,
+                    status, submitted_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+                """,
+                (
+                    report_no,
+                    actor.get("id") if actor else None,
+                    self._actor_name(actor),
+                    department_id,
+                    device_id,
+                    patient_id,
+                    problem_type,
+                    severity,
+                    description,
+                    submitted_at,
+                    self._optional_text(payload, "remark"),
+                ),
+            )
+            self._insert_trace_event(connection, device_id, "QUALITY_REPORT", "质量问题上报", f"{problem_type}：{description}", "quality_reports", cursor.lastrowid, self._actor_name(actor), department, submitted_at)
+            self._log_audit(connection, actor, "QUALITY_REPORT_CREATE", "quality_report", cursor.lastrowid, report_no, f"上报 {device[0]['device_name']} 质量问题。", ip_address)
+            return self._fetch_quality_report(connection, cursor.lastrowid)
+
+    def handle_quality_report(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        report_id = self._required_int(payload, "report_id", "请选择质量问题报告。")
+        status = self._optional_text(payload, "status") or "processing"
+        if status not in {"processing", "resolved", "rejected"}:
+            raise ValueError("质量问题处理状态不正确。")
+        handling_result = self._required_text(payload, "handling_result", "请填写处理意见。")
+        handled_at = now_text()
+        with get_connection(self.db_path) as connection:
+            report = connection.execute("SELECT * FROM quality_reports WHERE id = ?", (report_id,)).fetchone()
+            if report is None:
+                raise ValueError("质量问题报告不存在。")
+            connection.execute(
+                """
+                UPDATE quality_reports
+                SET status = ?, handled_by = ?, handled_at = ?,
+                    handling_result = ?, remark = COALESCE(?, remark)
+                WHERE id = ?
+                """,
+                (status, self._actor_name(actor), handled_at, handling_result, self._optional_text(payload, "remark"), report_id),
+            )
+            self._insert_trace_event(connection, report["device_id"], "QUALITY_HANDLE", "质量问题处理", handling_result, "quality_reports", report_id, self._actor_name(actor), "质控办", handled_at)
+            self._log_audit(connection, actor, "QUALITY_REPORT_HANDLE", "quality_report", report_id, report["report_no"], f"质量问题处理状态：{status}。", ip_address)
+            return self._fetch_quality_report(connection, report_id)
+
+    def create_transfer(
+        self,
+        payload: dict[str, Any],
+        actor: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
+        device_id = self._required_int(payload, "device_id", "请选择调拨器械。")
+        quantity = self._required_positive_int(payload, "quantity", "调拨数量必须大于 0。")
+        from_department_id = self._required_int(payload, "from_department_id", "请选择调出科室。")
+        to_department_id = self._required_int(payload, "to_department_id", "请选择调入科室。")
+        reason = self._required_text(payload, "reason", "调拨原因不能为空。")
+        transferred_at = now_text()
+        with get_connection(self.db_path) as connection:
+            device = self._fetch_devices(connection, "WHERE d.id = ?", (device_id,))
+            if not device:
+                raise ValueError("器械不存在。")
+            self._ensure_exists(connection, "departments", from_department_id, "调出科室不存在。")
+            self._ensure_exists(connection, "departments", to_department_id, "调入科室不存在。")
+            if device[0]["stock_qty"] < quantity:
+                raise ValueError("库存不足，无法调拨。")
+            from_department = connection.execute("SELECT name FROM departments WHERE id = ?", (from_department_id,)).fetchone()["name"]
+            to_department = connection.execute("SELECT name FROM departments WHERE id = ?", (to_department_id,)).fetchone()["name"]
+            transfer_no = self._generate_number(connection, "TF", "department_transfers", "transfer_no")
+            cursor = connection.execute(
+                """
+                INSERT INTO department_transfers (
+                    transfer_no, device_id, quantity, from_department_id,
+                    to_department_id, operator_name, reason, transferred_at, remark
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    transfer_no,
+                    device_id,
+                    quantity,
+                    from_department_id,
+                    to_department_id,
+                    self._actor_name(actor),
+                    reason,
+                    transferred_at,
+                    self._optional_text(payload, "remark"),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO stock_movements (
+                    device_id, movement_type, quantity, warehouse, department_id,
+                    operator_name, remark, occurred_at
+                )
+                VALUES (?, 'TRANSFER', ?, ?, ?, ?, ?, ?)
+                """,
+                (device_id, quantity, from_department, to_department_id, self._actor_name(actor), reason, transferred_at),
+            )
+            connection.execute(
+                """
+                UPDATE devices
+                SET current_location = ?, last_seen_at = ?
+                WHERE id = ?
+                """,
+                (to_department, transferred_at, device_id),
+            )
+            self._insert_trace_event(connection, device_id, "TRANSFER", "完成科室调拨", f"{from_department} 调拨至 {to_department}，数量 {quantity}{device[0]['unit']}。", "department_transfers", cursor.lastrowid, self._actor_name(actor), to_department, transferred_at)
+            self._log_audit(connection, actor, "TRANSFER_CREATE", "transfer", cursor.lastrowid, transfer_no, f"{from_department} 调拨至 {to_department}。", ip_address)
+            return self._fetch_transfer(connection, cursor.lastrowid)
 
     def create_device(
         self,
@@ -1886,6 +2877,30 @@ class TraceabilityService:
                 (device_id,),
             ).fetchall()
         ]
+        device_requests = [
+            dict(item)
+            for item in connection.execute(
+                """
+                SELECT request_no, requester_name, quantity, purpose, status, submitted_at, issued_at
+                FROM device_requests
+                WHERE device_id = ?
+                ORDER BY submitted_at DESC
+                """,
+                (device_id,),
+            ).fetchall()
+        ]
+        quality_reports = [
+            dict(item)
+            for item in connection.execute(
+                """
+                SELECT report_no, problem_type, severity, status, submitted_at, handled_at
+                FROM quality_reports
+                WHERE device_id = ?
+                ORDER BY submitted_at DESC
+                """,
+                (device_id,),
+            ).fetchall()
+        ]
         timeline = self._fetch_timeline(connection, [device_id])
         forward_path = list(reversed(timeline))
         graph = self._device_graph(summary, impacted_patients, departments, recalls, scraps, procurements)
@@ -1903,6 +2918,8 @@ class TraceabilityService:
                 "recalls": recalls,
                 "scraps": scraps,
                 "procurements": procurements,
+                "device_requests": device_requests,
+                "quality_reports": quality_reports,
             },
             "mappings": mappings,
             "graph": graph,
@@ -2282,6 +3299,159 @@ class TraceabilityService:
             WHERE sr.id = ?
             """,
             (scrap_id,),
+        ).fetchone()
+        return dict(row)
+
+    def _fetch_purchase_plan(self, connection, plan_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+                pp.id,
+                pp.plan_no,
+                pp.quantity,
+                pp.estimated_unit_price,
+                pp.reason,
+                pp.source,
+                pp.status,
+                pp.submitted_by,
+                pp.submitted_at,
+                pp.reviewed_by,
+                pp.reviewed_at,
+                pp.review_note,
+                pp.purchased_at,
+                pp.remark,
+                d.device_name,
+                d.batch_no,
+                d.stock_qty,
+                d.reorder_threshold,
+                d.unit,
+                s.name AS supplier_name
+            FROM purchase_plans pp
+            JOIN devices d ON d.id = pp.device_id
+            LEFT JOIN suppliers s ON s.id = pp.supplier_id
+            WHERE pp.id = ?
+            """,
+            (plan_id,),
+        ).fetchone()
+        return dict(row)
+
+    def _fetch_inbound_order(self, connection, order_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+                io.id,
+                io.order_no,
+                io.quantity,
+                io.warehouse,
+                io.status,
+                io.submitted_by,
+                io.submitted_at,
+                io.reviewed_by,
+                io.reviewed_at,
+                io.review_note,
+                io.received_at,
+                io.remark,
+                pp.plan_no,
+                p.request_no AS procurement_no,
+                d.device_name,
+                d.batch_no,
+                d.unit,
+                s.name AS supplier_name
+            FROM inbound_orders io
+            LEFT JOIN purchase_plans pp ON pp.id = io.plan_id
+            LEFT JOIN procurements p ON p.id = io.procurement_id
+            JOIN devices d ON d.id = io.device_id
+            LEFT JOIN suppliers s ON s.id = io.supplier_id
+            WHERE io.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        return dict(row)
+
+    def _fetch_device_request(self, connection, request_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+                dr.id,
+                dr.request_no,
+                dr.requester_name,
+                dep.name AS department_name,
+                d.device_name,
+                d.batch_no,
+                d.unit,
+                dr.quantity,
+                dr.purpose,
+                dr.status,
+                dr.submitted_at,
+                dr.reviewed_by,
+                dr.reviewed_at,
+                dr.review_note,
+                dr.issued_by,
+                dr.issued_at,
+                dr.remark
+            FROM device_requests dr
+            JOIN departments dep ON dep.id = dr.department_id
+            JOIN devices d ON d.id = dr.device_id
+            WHERE dr.id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+        return dict(row)
+
+    def _fetch_quality_report(self, connection, report_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+                qr.id,
+                qr.report_no,
+                qr.reporter_name,
+                dep.name AS department_name,
+                d.device_name,
+                d.batch_no,
+                p.patient_no,
+                p.name AS patient_name,
+                qr.problem_type,
+                qr.severity,
+                qr.description,
+                qr.status,
+                qr.submitted_at,
+                qr.handled_by,
+                qr.handled_at,
+                qr.handling_result,
+                qr.remark
+            FROM quality_reports qr
+            JOIN departments dep ON dep.id = qr.department_id
+            JOIN devices d ON d.id = qr.device_id
+            LEFT JOIN patients p ON p.id = qr.patient_id
+            WHERE qr.id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+        return dict(row)
+
+    def _fetch_transfer(self, connection, transfer_id: int) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT
+                dt.id,
+                dt.transfer_no,
+                d.device_name,
+                d.batch_no,
+                d.unit,
+                dt.quantity,
+                fd.name AS from_department,
+                td.name AS to_department,
+                dt.operator_name,
+                dt.reason,
+                dt.transferred_at,
+                dt.remark
+            FROM department_transfers dt
+            JOIN devices d ON d.id = dt.device_id
+            JOIN departments fd ON fd.id = dt.from_department_id
+            JOIN departments td ON td.id = dt.to_department_id
+            WHERE dt.id = ?
+            """,
+            (transfer_id,),
         ).fetchone()
         return dict(row)
 

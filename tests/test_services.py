@@ -134,6 +134,96 @@ class TraceabilityServiceTests(unittest.TestCase):
         after = self.service.resolve_device_snapshot(target["udi_code"])["stock_qty"]
         self.assertEqual(after, before + 3)
 
+    def test_purchase_plan_and_inbound_order_flow(self) -> None:
+        lookups = self.service.get_lookups()
+        target = next(item for item in lookups["devices"] if item["device_name"] == "中心静脉导管包")
+        before = self.service.resolve_device_snapshot(target["udi_code"])["stock_qty"]
+
+        plan = self.service.create_purchase_plan(
+            {
+                "device_id": target["id"],
+                "supplier_id": target["supplier_id"],
+                "quantity": 5,
+                "estimated_unit_price": 280,
+                "reason": "单元测试库存预警补货",
+                "source": "库存预警",
+            }
+        )
+        self.assertEqual(plan["status"], "submitted")
+
+        approved_plan = self.service.approve_purchase_plan({"plan_id": plan["id"], "review_note": "同意测试采购计划"})
+        self.assertEqual(approved_plan["status"], "approved")
+
+        inbound_order = self.service.create_inbound_order(
+            {
+                "plan_id": plan["id"],
+                "device_id": target["id"],
+                "quantity": 5,
+                "warehouse": "中央库房",
+            }
+        )
+        self.assertEqual(inbound_order["status"], "submitted")
+
+        received_order = self.service.approve_inbound_order(
+            {"order_id": inbound_order["id"], "decision": "received", "review_note": "测试验收入库通过"}
+        )
+        self.assertEqual(received_order["status"], "received")
+
+        after = self.service.resolve_device_snapshot(target["udi_code"])["stock_qty"]
+        self.assertEqual(after, before + 5)
+
+    def test_request_quality_and_transfer_flow(self) -> None:
+        lookups = self.service.get_lookups()
+        target = next(item for item in lookups["devices"] if item["device_name"] == "医用敷料包")
+        department_id = next(item["id"] for item in lookups["departments"] if item["name"] == "普外科")
+        to_department_id = next(item["id"] for item in lookups["departments"] if item["name"] == "ICU")
+        patient_id = lookups["patients"][0]["id"]
+
+        request = self.service.create_device_request(
+            {
+                "device_id": target["id"],
+                "department_id": department_id,
+                "quantity": 2,
+                "purpose": "单元测试申领换药耗材",
+            }
+        )
+        self.assertEqual(request["status"], "submitted")
+        approved_request = self.service.approve_device_request({"request_id": request["id"]})
+        self.assertEqual(approved_request["status"], "approved")
+        issued_request = self.service.issue_device_request({"request_id": request["id"]})
+        self.assertEqual(issued_request["status"], "issued")
+
+        report = self.service.create_quality_report(
+            {
+                "device_id": target["id"],
+                "department_id": department_id,
+                "patient_id": patient_id,
+                "problem_type": "包装破损",
+                "severity": "中",
+                "description": "单元测试质量问题上报",
+            }
+        )
+        self.assertEqual(report["status"], "submitted")
+        handled = self.service.handle_quality_report(
+            {
+                "report_id": report["id"],
+                "status": "resolved",
+                "handling_result": "单元测试处理完成",
+            }
+        )
+        self.assertEqual(handled["status"], "resolved")
+
+        transfer = self.service.create_transfer(
+            {
+                "device_id": target["id"],
+                "quantity": 1,
+                "from_department_id": department_id,
+                "to_department_id": to_department_id,
+                "reason": "单元测试科室调拨",
+            }
+        )
+        self.assertEqual(transfer["to_department"], "ICU")
+
     def test_recall_create_and_close_updates_device_status(self) -> None:
         created = self.service.create_recall_case(
             {
